@@ -188,7 +188,20 @@ export interface Config {
    * and registers them the moment a settings section supplies profiles.
    */
   providers?: Record<string, PiAiProviderProfile>
+  /** Loopback-only HTTP proxy controlled by the Models settings page. */
+  localRoute?: LocalRouteConfig
 }
+
+/** Runtime settings for the loopback protocol-converting proxy. */
+export interface LocalRouteConfig {
+  /** Whether the proxy should listen. */
+  enabled?: boolean
+  /** TCP port on 127.0.0.1. */
+  port?: number
+}
+
+/** Default local proxy port when none has been selected yet. */
+export const DEFAULT_LOCAL_ROUTE_PORT = 8317
 
 const thinkingBudgets = z.object({
   minimal: z.number(),
@@ -268,6 +281,10 @@ const profile = z.object({
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
   providers: z.dict(profile).default({}),
+  localRoute: z.object({
+    enabled: z.boolean().default(false),
+    port: z.number().step(1).min(1024).max(65_535).default(DEFAULT_LOCAL_ROUTE_PORT),
+  }).default({ enabled: false, port: DEFAULT_LOCAL_ROUTE_PORT }),
 })
 
 /**

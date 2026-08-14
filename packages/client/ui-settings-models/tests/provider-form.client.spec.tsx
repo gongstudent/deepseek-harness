@@ -717,8 +717,13 @@ describe('hand-declared providers', () => {
     // control could only be set to a value some of them reject — which would
     // take the whole provider out of the picker. The composer's model picker
     // owns the choice, and a switch there records provider+model+effort together.
-    const fields = () => [...document.querySelectorAll('input,select,textarea')]
+    const fields = (root: ParentNode = document) => [...root.querySelectorAll('input,select,textarea')]
       .map(el => el.getAttribute('aria-label')).filter(Boolean)
+    const editorFields = (): (string | null)[] => {
+      const row = screen.getByLabelText(en.keyInput).closest('li')
+      if (row === null) throw new Error('provider editor is not inside its provider row')
+      return fields(row)
+    }
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
@@ -733,7 +738,7 @@ describe('hand-declared providers', () => {
     await mountSection({ providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY' } } })
     openEditor('openai')
     fireEvent.click(screen.getByText(en.customized))
-    expect(fields()).toEqual([en.keyInput, en.baseUrl])
+    expect(editorFields()).toEqual([en.keyInput, en.baseUrl])
     cleanup()
 
     // A hand-declared route named its own protocol at creation, so editing it
@@ -743,7 +748,7 @@ describe('hand-declared providers', () => {
       declaredRoutes: ['acme-gateway'],
     })
     openEditor('acme-gateway')
-    expect(fields()).toEqual([
+    expect(editorFields()).toEqual([
       en.keyInput, en.customDisplayName, en.baseUrl, en.inboundApi,
       en.customApi, en.headers, en.bodyOverrides,
     ])

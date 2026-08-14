@@ -65,6 +65,7 @@ import { catalogProviderIds, catalogProviderTakesApiKey } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
+import { LocalRouteServer } from './local-route.ts'
 
 export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
@@ -78,7 +79,10 @@ export type {
   PiAiReasoningEfforts,
   PiAiThinkingFormat,
   ResolvedPiAiProviderProfile,
+  LocalRouteConfig,
 } from './config.ts'
+export { LocalRouteServer } from './local-route.ts'
+export type { LocalRouteProtocol, LocalRouteServerOptions } from './local-route.ts'
 export { supportedProtocols } from './provider.ts'
 
 export const name = 'llm-pi-ai'
@@ -202,6 +206,25 @@ export function apply(ctx: Context, config: Config): void {
     resolveApiKey,
     resolveAttachments: () => ctx.get('attachments'),
   })
+  const localRoute = new LocalRouteServer({
+    profiles,
+    resolveApiKey,
+    logger: {
+      info: (message) => { ctx.logger.info(message) },
+      error: (message, error) => {
+        ctx.logger.error(message)
+        ctx.logger.error(error)
+      },
+    },
+  })
+  const ensureLocalRoute = (): void => {
+    void localRoute.configure(current().localRoute).catch(() => {
+      // The controller already logs the bind/transition error. Keeping the
+      // rejection contained prevents a settings watcher from becoming noisy.
+    })
+  }
+  ensureLocalRoute()
+  ctx.effect(() => async () => { await localRoute.close() })
   // The full installed catalog is configurable from the moment the plugin
   // mounts — dormant or not — so configuration surfaces can offer every
   // pi-ai provider before any route exists. Hand-declared routes join it as
@@ -284,6 +307,7 @@ export function apply(ctx: Context, config: Config): void {
       current = source
     },
     onChange: () => {
+      ensureLocalRoute()
       // Named here rather than left to the settings watcher: `assertServiceable`
       // cannot see the llm registry, so a profile claiming a route another
       // adapter family owns is stored successfully and only fails at this swap.

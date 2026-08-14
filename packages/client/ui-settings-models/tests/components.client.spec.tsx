@@ -45,6 +45,10 @@ const PiAiConfig = Schema.object({
     inboundApi: Schema.union(['openai-completions', 'openai-responses', 'anthropic-messages']),
     bodyOverrides: Schema.dict(Schema.any()),
   })),
+  localRoute: Schema.object({
+    enabled: Schema.boolean().default(false),
+    port: Schema.number().step(1).min(1024).max(65_535).default(8317),
+  }).default({ enabled: false, port: 8317 }),
 })
 
 const DeepSeekConfig = Schema.object({
@@ -116,7 +120,7 @@ function wireNamespaces(): SettingsNamespaceView[] {
     {
       ns: 'llm-pi-ai',
       schema: JSON.parse(JSON.stringify(PiAiConfig.toJSON())) as unknown,
-      value: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://proxy', headers: { 'X-Team': 'a' } }, zombie: {} } },
+      value: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://proxy', headers: { 'X-Team': 'a' } }, zombie: {} }, localRoute: { enabled: false, port: 8317 } },
       user: { providers: { openai: { apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://proxy', headers: { 'X-Team': 'a' } }, zombie: {} } },
       applies: 'live',
       secrets: [],
@@ -232,6 +236,38 @@ describe('ModelsSection', () => {
     const uninjected = {} as ModelsSectionProps
     render(<ModelsSection {...uninjected} />)
     expect(document.body.textContent).toBe('')
+  })
+
+  it('starts the local route on the selected port from its switch', async () => {
+    const { mutate } = await mountSection()
+    const port = screen.getByLabelText<HTMLInputElement>(en.localRoutePort)
+    expect(port.value).toBe('8317')
+    expect(screen.getByText('http://127.0.0.1:8317')).toBeTruthy()
+    const toggle = screen.getByRole('switch', { name: en.localRouteEnabled })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(port, { target: { value: '9021' } })
+    fireEvent.click(toggle)
+    await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+    expect(mutate.mock.calls[0]?.[0]).toEqual({
+      ns: 'llm-pi-ai',
+      ops: [{ op: 'set', path: ['localRoute'], value: { enabled: true, port: 9021 } }],
+      expectedRevision: 0,
+    })
+  })
+
+  it('saves a stopped route port and refuses ports outside the safe range', async () => {
+    const { mutate } = await mountSection()
+    const port = screen.getByLabelText<HTMLInputElement>(en.localRoutePort)
+    fireEvent.change(port, { target: { value: '80' } })
+    fireEvent.blur(port)
+    expect(await screen.findByText(en.localRoutePortInvalid)).toBeTruthy()
+    expect(mutate).not.toHaveBeenCalled()
+    fireEvent.change(port, { target: { value: '9123' } })
+    fireEvent.blur(port)
+    await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+    expect(mutate.mock.calls[0]?.[0]).toMatchObject({
+      ops: [{ op: 'set', path: ['localRoute'], value: { enabled: false, port: 9123 } }],
+    })
   })
 
   it('renders the unkeyed whole-section provider as an open setup card in the first-run posture', async () => {

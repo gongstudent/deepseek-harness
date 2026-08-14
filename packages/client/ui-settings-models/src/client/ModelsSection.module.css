@@ -45,6 +45,116 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
+.localRouteControl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.localRouteHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.localRouteTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.localRouteAddress {
+  margin: 1px 0 0;
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.routeSwitch {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.routeSwitch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.routeSwitch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.routeSwitchTrack {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--dsw-alias-border-l2);
+  transition: background-color 120ms var(--ds-ease-in-out);
+}
+
+.routeSwitchThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-layer-1);
+  transition: transform 120ms var(--ds-ease-in-out);
+}
+
+.routeSwitchTrack[data-on='true'] {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.routeSwitchTrack[data-on='true'] .routeSwitchThumb {
+  transform: translateX(16px);
+}
+
+.routePortField {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.input.routePortInput {
+  width: 128px;
+}
+
+.routeRunning,
+.routeStopped {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.routeRunning {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.routeStopped {
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .rows {
   list-style: none;
   /* Extra air between the title/intro block and the first provider card. */

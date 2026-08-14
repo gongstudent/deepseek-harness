@@ -15,6 +15,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { Button, IconPlusOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-web-react'
 import { CustomProviderCard } from './CustomProviderCard.tsx'
@@ -163,6 +164,117 @@ export function providerCopy(template: string, target: ProviderIdentity): string
   return template.replace('{provider}', () => providerTargetLabel(target))
 }
 
+interface LocalRouteControlProps {
+  namespace: SettingsNamespaceView
+  controller: ModelsSettingsStore
+  api: Pick<IApiClient, 'settings'>
+  t: ModelsSectionInjected['t']
+  readOnly: boolean
+}
+
+function localRouteValue(namespace: SettingsNamespaceView): { enabled: boolean; port: number } {
+  const raw = namespace.value as { localRoute?: { enabled?: unknown; port?: unknown } }
+  return {
+    enabled: raw.localRoute?.enabled === true,
+    port: typeof raw.localRoute?.port === 'number' ? raw.localRoute.port : 8317,
+  }
+}
+
+/** Top-level listener controls owned by the pi-ai settings namespace. */
+function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRouteControlProps): ReactNode {
+  const value = localRouteValue(namespace)
+  const [portDraft, setPortDraft] = useState(String(value.port))
+  const [pending, setPending] = useState(false)
+  const [failure, setFailure] = useState<string | undefined>(undefined)
+  const parsedPort = /^\d+$/.test(portDraft) ? Number(portDraft) : Number.NaN
+  const portValid = Number.isInteger(parsedPort) && parsedPort >= 1024 && parsedPort <= 65_535
+
+  const write = (enabled: boolean, port: number): void => {
+    if (pending || readOnly) return
+    setPending(true)
+    setFailure(undefined)
+    void api.settings.mutate({
+      ns: namespace.ns,
+      ops: [{ op: 'set', path: ['localRoute'], value: { enabled, port } }],
+      expectedRevision: namespace.revision,
+    }).then(async (response) => {
+      if (!response.result.ok) {
+        setFailure(response.result.error.message)
+        return
+      }
+      await controller.load()
+    }).catch((error: unknown) => {
+      setFailure(messageOf(error))
+    }).finally(() => { setPending(false) })
+  }
+
+  const savePort = (): void => {
+    if (!portValid) {
+      setFailure(t('localRoutePortInvalid'))
+      return
+    }
+    if (parsedPort !== value.port) write(value.enabled, parsedPort)
+  }
+
+  return (
+    <section className={styles['localRouteControl']} aria-labelledby="local-route-heading">
+      <div className={styles['localRouteHead']}>
+        <div>
+          <h3 id="local-route-heading" className={styles['localRouteTitle']}>{t('localRoute')}</h3>
+          <p className={styles['localRouteAddress']}>
+            {t('localRouteAddress').replace('{port}', String(portValid ? parsedPort : value.port))}
+          </p>
+        </div>
+        <button
+          type="button"
+          className={styles['routeSwitch']}
+          role="switch"
+          aria-checked={value.enabled}
+          aria-label={t('localRouteEnabled')}
+          title={value.enabled ? t('localRouteStop') : t('localRouteStart')}
+          disabled={pending || readOnly}
+          onClick={() => {
+            if (!portValid) {
+              setFailure(t('localRoutePortInvalid'))
+              return
+            }
+            write(!value.enabled, parsedPort)
+          }}
+        >
+          <span className={styles['routeSwitchTrack']} data-on={value.enabled || undefined} aria-hidden="true">
+            <span className={styles['routeSwitchThumb']} />
+          </span>
+        </button>
+      </div>
+      <label className={styles['routePortField']}>
+        <span className={styles['fieldLabel']}>{t('localRoutePort')}</span>
+        <input
+          type="number"
+          min={1024}
+          max={65_535}
+          step={1}
+          className={`${styles['input']} ${styles['routePortInput']}`}
+          value={portDraft}
+          aria-label={t('localRoutePort')}
+          disabled={pending || readOnly}
+          onChange={(event) => {
+            setPortDraft(event.target.value)
+            setFailure(undefined)
+          }}
+          onBlur={savePort}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur()
+          }}
+        />
+      </label>
+      <p className={value.enabled ? styles['routeRunning'] : styles['routeStopped']}>
+        {pending ? t('localRouteApplying') : value.enabled ? t('localRouteRunning') : t('localRouteStopped')}
+      </p>
+      {failure === undefined ? null : <p className={styles['error']}>{failure}</p>}
+    </section>
+  )
+}
+
 /**
  * Render the Models section content column.
  * @param props - slot-delivered injected dependencies.
@@ -270,6 +382,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
   // one whose schema names the protocols one may speak; without it mounted
   // there is nothing to declare and the entry point stays disabled.
   const protocols = protocolChoices(state.namespaces.get('llm-pi-ai'))
+  const piAiNamespace = state.namespaces.get('llm-pi-ai')
 
   return (
     <div className={styles['section']}>
@@ -282,6 +395,18 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
           <p className={styles['savedNotice']} role="status" aria-live="polite">
             {providerCopy(t('savedProvider'), savedIdentity)}
           </p>
+        )}
+      {piAiNamespace === undefined
+        ? null
+        : (
+          <LocalRouteControl
+            key={piAiNamespace.revision}
+            namespace={piAiNamespace}
+            controller={controller}
+            api={api}
+            t={t}
+            readOnly={!state.writable}
+          />
         )}
       <ul className={styles['rows']}>
         {configured.map((row) => {

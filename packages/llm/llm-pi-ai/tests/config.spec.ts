@@ -66,6 +66,14 @@ describe('modality schema boundary', () => {
 })
 
 describe('local-route schema boundary', () => {
+  it('materializes safe listener defaults and validates a custom port', () => {
+    const defaults = Config({}) as Config & { localRoute: { enabled: boolean; port: number } }
+    expect(defaults.localRoute).toEqual({ enabled: false, port: 8317 })
+    expect(() => Config({ localRoute: { enabled: true, port: 9123 } })).not.toThrow()
+    expect(() => Config({ localRoute: { enabled: true, port: 80 } })).toThrow(/1024/)
+    expect(() => Config({ localRoute: { enabled: true, port: 70_000 } })).toThrow(/65535/)
+  })
+
   it('accepts the protocols a route can convert, for both inbound and outbound', () => {
     expect(routeWith({ inboundApi: 'anthropic-messages' })).not.toThrow()
     expect(routeWith({ inboundApi: 'openai-responses', api: 'openai-completions' })).not.toThrow()

@@ -152,6 +152,37 @@ export function pathOps(
   return ops
 }
 
+/** Structural equality for values carried by a settings namespace. */
+function equalJson(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right)
+      && left.length === right.length
+      && left.every((value, index) => equalJson(value, right[index]))
+  }
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return false
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const keys = Object.keys(leftRecord)
+  return keys.length === Object.keys(rightRecord).length
+    && keys.every(key => key in rightRecord && equalJson(leftRecord[key], rightRecord[key]))
+}
+
+/**
+ * Rebase a path-addressed mutation over unrelated namespace writes while
+ * retaining the revision that will reject a concurrent edit of this subtree.
+ */
+export function mutationRevision(
+  namespace: SettingsNamespaceView,
+  path: readonly string[],
+  baseline: unknown,
+  expectedRevision: number,
+): number {
+  return equalJson(getPath(namespace.user, path), baseline)
+    ? namespace.revision
+    : expectedRevision
+}
+
 /** The editor layout the owning namespace selects. */
 function layoutOf(ns: string): EditorLayout {
   if (ns === 'llm-deepseek') return 'deepseek'
@@ -326,7 +357,8 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         ? [{ op: 'set', path: [...settingsPath], value: {} }]
         : pathOps(settingsPath, committedOriginal, next)
     if (ops.length > 0) {
-      const response = await api.settings.mutate({ ns, ops, expectedRevision })
+      const revision = mutationRevision(namespace, settingsPath, committedOriginal, expectedRevision)
+      const response = await api.settings.mutate({ ns, ops, expectedRevision: revision })
       if (!response.result.ok) {
         return response.result.error.code === 'settings-conflict'
           ? t('conflict')

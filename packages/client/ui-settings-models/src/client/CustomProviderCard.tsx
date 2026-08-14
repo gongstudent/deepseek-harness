@@ -54,9 +54,9 @@ export interface CustomProviderCardProps {
   /** Wire protocols the adapter can serve, in the order it reports them. */
   protocols: readonly string[]
   /**
-   * Revision of the `llm-pi-ai` user section this card opened at, sent with
-   * the create so a route another tab declared meanwhile is a refusal rather
-   * than a silent overwrite of its whole profile.
+   * Latest revision of the `llm-pi-ai` user section. The parent refreshes this
+   * while the draft stays mounted, so unrelated local-route/provider writes do
+   * not make the eventual create stale.
    */
   revision: number
   /** Wire faces for the write and for interrogating the endpoint. */
@@ -76,9 +76,6 @@ export interface CustomProviderCardProps {
  */
 export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const { taken, protocols, api, t } = props
-  // Captured at mount, like the editor's: the write must be judged against the
-  // section this card was drafted over, not whatever it grew into meanwhile.
-  const [openedAt] = useState(() => props.revision)
   const [route, setRoute] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [baseURL, setBaseURL] = useState('')
@@ -172,12 +169,16 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       const response = await api.settings.mutate({
         ns: NS,
         ops: [{ op: 'set', path: ['providers', route], value: profile }],
-        // `taken` is a snapshot too, so the id check alone cannot see a route
-        // declared after this card opened; the revision makes that race a
-        // `settings-conflict` instead of a write over the other profile.
-        expectedRevision: openedAt,
+        // A refreshed `taken` catches an id already created while this draft
+        // stayed open. The latest section revision permits unrelated writes;
+        // a create racing after this render is still refused by the Host.
+        expectedRevision: props.revision,
       })
-      if (!response.result.ok) return response.result.error.message
+      if (!response.result.ok) {
+        return response.result.error.code === 'settings-conflict'
+          ? t('conflict')
+          : response.result.error.message
+      }
       // The provider now exists. A retry after the key write below fails must
       // not re-run this mutate: the revision it holds is the one this write
       // just superseded, so the Host would answer `settings-conflict` and the

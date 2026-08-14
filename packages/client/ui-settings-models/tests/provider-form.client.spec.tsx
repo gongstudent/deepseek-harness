@@ -8,6 +8,7 @@ import type { RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-re
 import { ModelsSection, providerCopy } from '../src/client/ModelsSection.tsx'
 import type { ModelsSectionInjected } from '../src/client/ModelsSection.tsx'
 import { CustomProviderCard } from '../src/client/CustomProviderCard.tsx'
+import { ProviderEditor } from '../src/client/ProviderEditor.tsx'
 import { formatCapacity, parseCapacity } from '../src/client/DeepSeekModelsEditor.tsx'
 import { ModelsSettingsStore, deriveKeyRef, protocolChoices } from '../src/client/store.ts'
 import { en } from '../src/client/locales.ts'
@@ -656,6 +657,26 @@ describe('provider rows', () => {
 })
 
 describe('hand-declared providers', () => {
+  function acmeEditor(
+    namespace: SettingsNamespaceView,
+    api: Parameters<typeof ProviderEditor>[0]['api'],
+    onClose: (changed: boolean) => void,
+  ) {
+    return (
+      <ProviderEditor
+        provider="acme-gateway"
+        displayName="acme-gateway"
+        declared
+        namespace={namespace}
+        settingsPath={['providers', 'acme-gateway']}
+        api={api}
+        t={t}
+        readOnly={false}
+        onClose={onClose}
+      />
+    )
+  }
+
   function mountCard(
     overrides: Partial<Parameters<typeof CustomProviderCard>[0]> = {},
     wire: Parameters<typeof scriptedFace>[0] = {},
@@ -709,6 +730,97 @@ describe('hand-declared providers', () => {
       expectedRevision: 7,
     })
     expect(set).toHaveBeenCalledWith({ ref: 'ACME_GATEWAY_API_KEY', value: 'gw-key' })
+  })
+
+  it('keeps a create draft and uses the latest revision after unrelated settings change', async () => {
+    const scripted = scriptedFace()
+    const onClose = vi.fn()
+    const card = (revision: number) => (
+      <CustomProviderCard
+        taken={['openai']}
+        protocols={PROTOCOLS}
+        revision={revision}
+        api={scripted.face as never}
+        t={t}
+        readOnly={false}
+        onClose={onClose}
+      />
+    )
+    const { rerender } = render(card(7))
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'm' } })
+
+    rerender(card(9))
+    expect(screen.getByLabelText<HTMLInputElement>(en.customRoute).value).toBe('acme')
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(scripted.mutate).expectedRevision).toBe(9)
+  })
+
+  it('localizes a create raced after the latest render', async () => {
+    const mutate = vi.fn(() => Promise.resolve(fail(
+      'settings namespace "llm-pi-ai" changed since it was read',
+      'settings-conflict',
+    )))
+    mountCard({}, { mutate })
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'm' } })
+    fireEvent.click(screen.getByText(en.create))
+
+    await screen.findByText(en.conflict)
+    expect(screen.queryByText(/changed since it was read/)).toBeNull()
+  })
+
+  it('rebases an existing provider edit over an unrelated namespace change', async () => {
+    const providers = {
+      'acme-gateway': { api: 'openai-completions', baseURL: 'https://acme.test/v1' },
+    }
+    const scripted = scriptedFace({ providers })
+    const initial = piAiNamespace(providers)
+    const current: SettingsNamespaceView = {
+      ...initial,
+      value: { providers, localRoute: { enabled: true, port: 8317 } },
+      user: { providers, localRoute: { enabled: true, port: 8317 } },
+      revision: 9,
+    }
+    const onClose = vi.fn()
+    const { rerender } = render(acmeEditor(initial, scripted.face as never, onClose))
+
+    fireEvent.change(screen.getByLabelText(en.customDisplayName), { target: { value: 'Acme' } })
+    rerender(acmeEditor(current, scripted.face as never, onClose))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(scripted.mutate).toHaveBeenCalledTimes(1) })
+    expect(firstMutate(scripted.mutate).expectedRevision).toBe(9)
+  })
+
+  it('retains the old revision when the same provider changed concurrently', async () => {
+    const providers = {
+      'acme-gateway': { api: 'openai-completions', baseURL: 'https://acme.test/v1' },
+    }
+    const mutate = vi.fn(() => Promise.resolve(fail('changed since it was read', 'settings-conflict')))
+    const scripted = scriptedFace({ providers, mutate })
+    const initial = piAiNamespace(providers)
+    const changedProviders = {
+      'acme-gateway': { ...providers['acme-gateway'], displayName: 'Changed elsewhere' },
+    }
+    const current = { ...piAiNamespace(changedProviders), revision: 9 }
+    const onClose = vi.fn()
+    const { rerender } = render(acmeEditor(initial, scripted.face as never, onClose))
+
+    fireEvent.change(screen.getByLabelText(en.customDisplayName), { target: { value: 'My edit' } })
+    rerender(acmeEditor(current, scripted.face as never, onClose))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await screen.findByText(en.conflict)
+    expect(firstMutate(mutate).expectedRevision).toBe(3)
   })
 
   it('scopes each card to fields a provider can actually own', async () => {

@@ -25,7 +25,10 @@ const PiAiConfig = Schema.object({
     apiKeyEnv: Schema.string().role('credential-ref'),
     displayName: Schema.string(),
     api: Schema.union(PROTOCOLS),
+    inboundApi: Schema.union(PROTOCOLS),
     baseURL: Schema.string(),
+    headers: Schema.dict(Schema.string()),
+    bodyOverrides: Schema.dict(Schema.any()),
     models: Schema.array(Schema.object({
       id: Schema.string().required(),
       name: Schema.string(),
@@ -714,12 +717,15 @@ describe('hand-declared providers', () => {
     // control could only be set to a value some of them reject — which would
     // take the whole provider out of the picker. The composer's model picker
     // owns the choice, and a switch there records provider+model+effort together.
-    const fields = () => [...document.querySelectorAll('input,select')]
+    const fields = () => [...document.querySelectorAll('input,select,textarea')]
       .map(el => el.getAttribute('aria-label')).filter(Boolean)
 
     mountCard()
     fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
-    expect(fields()).toEqual([en.customRoute, en.customDisplayName, en.baseUrl, en.customApi, en.keyInput])
+    expect(fields()).toEqual([
+      en.customRoute, en.customDisplayName, en.baseUrl, en.customApi,
+      en.inboundApi, en.headers, en.bodyOverrides, en.keyInput,
+    ])
     cleanup()
 
     // A shipped route's models each carry their own protocol, so its editor
@@ -737,7 +743,10 @@ describe('hand-declared providers', () => {
       declaredRoutes: ['acme-gateway'],
     })
     openEditor('acme-gateway')
-    expect(fields()).toEqual([en.keyInput, en.customDisplayName, en.baseUrl, en.customApi])
+    expect(fields()).toEqual([
+      en.keyInput, en.customDisplayName, en.baseUrl, en.inboundApi,
+      en.customApi, en.headers, en.bodyOverrides,
+    ])
   })
 
   it('renames a declared route and falls back to its id when the name is cleared', async () => {
@@ -855,6 +864,41 @@ describe('hand-declared providers', () => {
       ops: [{ op: 'set', path: ['providers', 'acme-gateway', 'api'], value: 'anthropic-messages' }],
       expectedRevision: 3,
     })
+  })
+
+  it('persists inbound protocol and header/body overrides for a declared route', async () => {
+    const { mutate } = await mountSection({
+      providers: { 'acme-gateway': { api: 'openai-completions', baseURL: 'https://acme.test/v1' } },
+      declaredRoutes: ['acme-gateway'],
+    })
+    openEditor('acme-gateway')
+
+    fireEvent.change(screen.getByLabelText(en.inboundApi), { target: { value: 'anthropic-messages' } })
+    fireEvent.change(screen.getByLabelText(en.headers), { target: { value: '{ "X-Team": "a" }' } })
+    fireEvent.change(screen.getByLabelText(en.bodyOverrides), { target: { value: '{ "stream": false }' } })
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalledTimes(1) })
+    const valueByPath = new Map(firstMutate(mutate).ops.map(op => [op.path.at(-1), op.value]))
+    expect(valueByPath.get('inboundApi')).toBe('anthropic-messages')
+    expect(valueByPath.get('headers')).toEqual({ 'X-Team': 'a' })
+    expect(valueByPath.get('bodyOverrides')).toEqual({ stream: false })
+  })
+
+  it('keeps invalid JSON in the editor out of the write', async () => {
+    const { mutate } = await mountSection({
+      providers: { 'acme-gateway': { api: 'openai-completions', baseURL: 'https://acme.test/v1' } },
+      declaredRoutes: ['acme-gateway'],
+    })
+    openEditor('acme-gateway')
+
+    fireEvent.change(screen.getByLabelText(en.headers), { target: { value: '{ nope' } })
+    expect(screen.getByText(en.headersInvalid)).toBeTruthy()
+    expect(buttonNamed(en.apply).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(en.bodyOverrides), { target: { value: '"not-an-object"' } })
+    expect(screen.getByText(en.bodyOverridesInvalid)).toBeTruthy()
+    expect(buttonNamed(en.apply).disabled).toBe(true)
+    expect(mutate).not.toHaveBeenCalled()
   })
 
   it('selects nothing for a declared route whose profile names no protocol', async () => {
@@ -1153,6 +1197,30 @@ describe('hand-declared providers', () => {
     expect(firstMutate(mutate).ops[0]?.value).toEqual({
       api: 'anthropic-messages',
       baseURL: 'https://acme.test/v1',
+      models: [{ id: 'm' }],
+    })
+  })
+
+  it('creates a local route with inbound protocol and overrides', async () => {
+    const { mutate, onClose } = mountCard()
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.change(screen.getByLabelText(en.customApi), { target: { value: 'openai-responses' } })
+    fireEvent.change(screen.getByLabelText(en.inboundApi), { target: { value: 'anthropic-messages' } })
+    fireEvent.change(screen.getByLabelText(en.headers), { target: { value: '{ "X-Team": "a" }' } })
+    fireEvent.change(screen.getByLabelText(en.bodyOverrides), { target: { value: '{ "stream": false }' } })
+    fireEvent.click(screen.getByRole('button', { name: en.addModel }))
+    fireEvent.change(screen.getByLabelText(`${en.modelId} 1`), { target: { value: 'm' } })
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual({
+      api: 'openai-responses',
+      inboundApi: 'anthropic-messages',
+      baseURL: 'https://acme.test/v1',
+      headers: { 'X-Team': 'a' },
+      bodyOverrides: { stream: false },
       models: [{ id: 'm' }],
     })
   })

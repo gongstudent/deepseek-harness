@@ -30,6 +30,7 @@ import { validateDeepSeekModels } from './DeepSeekModelsEditor.tsx'
 import { ModelListEditor } from './ModelListEditor.tsx'
 import type { ModelDraft } from './ModelListEditor.tsx'
 import { deriveKeyRef, messageOf } from './store.ts'
+import { parseJsonObject } from './ProviderEditor.tsx'
 import type { en } from './locales.ts'
 import styles from './ModelsSection.module.css'
 
@@ -82,6 +83,9 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   const [displayName, setDisplayName] = useState('')
   const [baseURL, setBaseURL] = useState('')
   const [protocol, setProtocol] = useState(protocols[0] ?? '')
+  const [inbound, setInbound] = useState('')
+  const [headersText, setHeadersText] = useState('')
+  const [bodyText, setBodyText] = useState('')
   const [keyDraft, setKeyDraft] = useState('')
   const [models, setModels] = useState<readonly ModelDraft[]>([])
   const [busy, setBusy] = useState(false)
@@ -107,9 +111,27 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
   // string, which the create path reads as "no key supplied" — a route may
   // legitimately authenticate through the provider's own ambient discovery.
   const keyValue = keyDraft.trim()
+  // Header overrides carry string values only; any other value would refuse
+  // the profile at write. Invalid or non-string JSON blocks creation.
+  const headerParse = parseJsonObject(headersText)
+  const headersValid = headerParse.ok
+    && (headerParse.value === undefined
+      || Object.values(headerParse.value).every(value => typeof value === 'string'))
+  const bodyParse = parseJsonObject(bodyText)
+  const bodyValid = bodyParse.ok
+  // Entry objects dropped when the JSON is absent, empty, or invalid; the
+  // invalid case can never reach a write because `ready` gates the card.
+  const headerEntry = headerParse.ok && headerParse.value !== undefined
+    && Object.keys(headerParse.value).length > 0
+    ? { headers: headerParse.value }
+    : {}
+  const bodyEntry = bodyParse.ok && bodyParse.value !== undefined
+    && Object.keys(bodyParse.value).length > 0
+    ? { bodyOverrides: bodyParse.value }
+    : {}
   const ready = route.length > 0 && !routeInvalid && !routeTaken
     && baseURL.length > 0 && models.length > 0 && modelFailure === undefined
-    && keyFailure === undefined
+    && keyFailure === undefined && headersValid && bodyValid
   // The one blocked gate worth a line under the form. A satisfied card says
   // nothing at all rather than printing an empty paragraph.
   const hint = failure !== undefined || ready
@@ -141,7 +163,10 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         // chain, ADC) instead of resolving a reference nothing ever sets.
         ...storesKey ? { apiKeyEnv: keyRef } : {},
         api: protocol,
+        ...inbound.length === 0 ? {} : { inboundApi: inbound },
         baseURL,
+        ...headerEntry,
+        ...bodyEntry,
         models: models.map(model => ({ ...model })),
       }
       const response = await api.settings.mutate({
@@ -233,6 +258,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
           onChange={(event) => { setBaseURL(event.target.value) }}
         />
       </div>
+      <p className={styles['localRouteLabel']}>{t('localRoute')}</p>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('customApi')}</span>
         <select
@@ -244,6 +270,45 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         >
           {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
         </select>
+      </div>
+      <div className={styles['field']}>
+        <span className={styles['fieldLabel']}>{t('inboundApi')}</span>
+        <select
+          className={`${styles['input']} ${styles['selectInput']}`}
+          value={inbound}
+          aria-label={t('inboundApi')}
+          disabled={profileDisabled}
+          onChange={(event) => { setInbound(event.target.value) }}
+        >
+          <option value="">{t('customApiUnset')}</option>
+          {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+        </select>
+      </div>
+      <div className={styles['field']}>
+        <span className={styles['fieldLabel']}>{t('headers')}</span>
+        <textarea
+          className={`${styles['input']} ${styles['jsonInput']}`}
+          rows={4}
+          value={headersText}
+          placeholder={t('headersPlaceholder')}
+          aria-label={t('headers')}
+          disabled={profileDisabled}
+          onChange={(event) => { setHeadersText(event.target.value) }}
+        />
+        {headersValid ? null : <p className={styles['error']}>{t('headersInvalid')}</p>}
+      </div>
+      <div className={styles['field']}>
+        <span className={styles['fieldLabel']}>{t('bodyOverrides')}</span>
+        <textarea
+          className={`${styles['input']} ${styles['jsonInput']}`}
+          rows={4}
+          value={bodyText}
+          placeholder={t('bodyOverridesPlaceholder')}
+          aria-label={t('bodyOverrides')}
+          disabled={profileDisabled}
+          onChange={(event) => { setBodyText(event.target.value) }}
+        />
+        {bodyValid ? null : <p className={styles['error']}>{t('bodyOverridesInvalid')}</p>}
       </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('keyInput')}</span>

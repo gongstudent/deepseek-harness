@@ -42,6 +42,8 @@ const PiAiConfig = Schema.object({
     baseURL: Schema.string(),
     reasoning: Schema.union(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     headers: Schema.dict(Schema.string()),
+    inboundApi: Schema.union(['openai-completions', 'openai-responses', 'anthropic-messages']),
+    bodyOverrides: Schema.dict(Schema.any()),
   })),
 })
 

@@ -68,11 +68,18 @@ export interface PiAiProviderProfile {
   /** Name shown by configuration surfaces; defaults to the route key. */
   displayName?: string
   /**
-   * Wire protocol every model on this route speaks. Omission keeps each
-   * installed catalog model's own protocol, which is why a catalog route needs
-   * no protocol at all; a route the catalog does not ship must name one.
+   * Outbound wire protocol every model on this route speaks to the upstream
+   * endpoint. Omission keeps each installed catalog model's own protocol,
+   * which is why a catalog route needs no protocol at all; a route the
+   * catalog does not ship must name one.
    */
   api?: string
+  /**
+   * Caller-facing wire protocol a local route accepts. A local (hand-declared)
+   * route records this so a proxy can convert an inbound request between
+   * protocols before forwarding it; outbound protocol is {@link api}.
+   */
+  inboundApi?: string
   /** Endpoint for this route's models; defaults to the installed catalog's endpoint. */
   baseURL?: string
   /**
@@ -122,6 +129,11 @@ export interface PiAiProviderProfile {
   defaultInput?: PiAiModality[]
   /** Provider request headers; Harness attribution wins reserved names. */
   headers?: Record<string, string>
+  /**
+   * Request-body keys a local route forwards to the upstream endpoint. Values
+   * override the fields pi-ai assembles; nested keys replace whole subtrees.
+   */
+  bodyOverrides?: Record<string, unknown>
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
   /** Token budgets used by reasoning providers that support them. */
@@ -233,6 +245,7 @@ const profile = z.object({
   apiKeyEnv: z.string().role('credential-ref'),
   displayName: z.string(),
   api: z.union(supportedProtocols()),
+  inboundApi: z.union(supportedProtocols()),
   baseURL: z.string(),
   models: z.array(modelProfile),
   modelOverrides: z.dict(modelOverride),
@@ -241,6 +254,7 @@ const profile = z.object({
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
+  bodyOverrides: z.dict(z.any()),
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),

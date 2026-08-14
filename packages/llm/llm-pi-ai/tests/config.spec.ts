@@ -64,3 +64,27 @@ describe('modality schema boundary', () => {
     expect(absent.providers['acme-gateway']?.defaultInput).toEqual(['text'])
   })
 })
+
+describe('local-route schema boundary', () => {
+  it('accepts the protocols a route can convert, for both inbound and outbound', () => {
+    expect(routeWith({ inboundApi: 'anthropic-messages' })).not.toThrow()
+    expect(routeWith({ inboundApi: 'openai-responses', api: 'openai-completions' })).not.toThrow()
+  })
+
+  it('rejects an inbound protocol the adapter cannot serve', () => {
+    expect(routeWith({ inboundApi: 'bedrock' })).toThrow(/expected/)
+    expect(routeWith({ inboundApi: 42 })).toThrow(/expected/)
+  })
+
+  it('accepts body overrides as any JSON object and materializes them', () => {
+    type Materialized = { providers: Record<string, { bodyOverrides?: unknown }> }
+    const withBody = routeWith({ bodyOverrides: { stream: false, metadata: { team: 'a' } } })() as Materialized
+    expect(withBody.providers['acme-gateway']?.bodyOverrides)
+      .toEqual({ stream: false, metadata: { team: 'a' } })
+  })
+
+  it('rejects a body override that is not a JSON object', () => {
+    expect(routeWith({ bodyOverrides: ['stream'] })).toThrow(/expected/)
+    expect(routeWith({ bodyOverrides: 'stream' })).toThrow(/expected/)
+  })
+})

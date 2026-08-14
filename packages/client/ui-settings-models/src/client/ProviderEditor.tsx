@@ -92,6 +92,37 @@ function draftAt(namespace: SettingsNamespaceView, path: readonly string[]): Rec
   return structuredClone(subtree) as Record<string, unknown>
 }
 
+/** Render a stored object as the JSON a textarea edits; absent renders empty. */
+function jsonTextOf(value: unknown): string {
+  return value === undefined ? '' : JSON.stringify(value, null, 2)
+}
+
+type JsonTextParse = { ok: true; value: Record<string, unknown> | undefined } | { ok: false }
+
+/** Parse a JSON textarea into a plain object; empty text means "unset". */
+export function parseJsonObject(text: string): JsonTextParse {
+  if (text.trim().length === 0) return { ok: true, value: undefined }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false }
+  return { ok: true, value: parsed as Record<string, unknown> }
+}
+
+/** Commit a parsed JSON field into the draft, dropping empty or all-default maps. */
+function commitJson(
+  current: Record<string, unknown>,
+  key: string,
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return value === undefined || Object.keys(value).length === 0
+    ? deletePath(current, [key])
+    : setPath(current, [key], value)
+}
+
 /**
  * The minimal path ops carrying `after` over `before`, both as the card sees
  * them. Only keys the card observed are named; fields absent from both sides
@@ -145,6 +176,8 @@ function refFor(namespace: SettingsNamespaceView, path: readonly string[], provi
 export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const { namespace, settingsPath, api, t } = props
   const [draft, setDraft] = useState<Record<string, unknown>>(() => draftAt(namespace, settingsPath))
+  const [headersText, setHeadersText] = useState(() => jsonTextOf(getPath(draft, ['headers'])))
+  const [bodyText, setBodyText] = useState(() => jsonTextOf(getPath(draft, ['bodyOverrides'])))
   const [keyDraft, setKeyDraft] = useState('')
   const [keyState, setKeyState] = useState<CredentialView | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -200,6 +233,30 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     const value = next === undefined || next.trim().length === 0 ? undefined : next
     setDraft(current => value === undefined ? deletePath(current, [key]) : setPath(current, [key], value))
   }
+  // Header overrides carry string values only; any other value would refuse
+  // the profile at write. Invalid or non-string JSON stays out of the draft
+  // and blocks Apply, exactly like a malformed model row.
+  const headerParse = parseJsonObject(headersText)
+  const headersValid = headerParse.ok
+    && (headerParse.value === undefined
+      || Object.values(headerParse.value).every(value => typeof value === 'string'))
+  const onHeadersChange = (text: string): void => {
+    setHeadersText(text)
+    const parsed = parseJsonObject(text)
+    if (!parsed.ok) return
+    if (parsed.value !== undefined
+      && Object.values(parsed.value).some(value => typeof value !== 'string')) return
+    setDraft(current => commitJson(current, 'headers', parsed.value))
+  }
+  // Body overrides accept any JSON object; empty text unsets the field.
+  const bodyParse = parseJsonObject(bodyText)
+  const bodyValid = bodyParse.ok
+  const onBodyChange = (text: string): void => {
+    setBodyText(text)
+    const parsed = parseJsonObject(text)
+    if (!parsed.ok) return
+    setDraft(current => commitJson(current, 'bodyOverrides', parsed.value))
+  }
 
   // The model list is validated by the same per-row checker for both families,
   // so a bad row is named by its position rather than by a blanket message.
@@ -218,6 +275,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   // What the form currently shows, which is what an interrogation must ask:
   // an edited-but-unsaved endpoint, and a key typed but not yet stored.
   const probeApi = stringAt(draft, 'api') ?? stringAt(fallback, 'api')
+  const inboundApi = stringAt(draft, 'inboundApi') ?? stringAt(fallback, 'inboundApi')
   const probeBaseURL = stringAt(draft, 'baseURL') ?? stringAt(fallback, 'baseURL')
   const probe = {
     settingsNs: namespace.ns,
@@ -422,6 +480,26 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                 }}
               />
             </div>
+            {ownsIdentity
+              ? (
+                <>
+                  <p className={styles['localRouteLabel']}>{t('localRoute')}</p>
+                  <div className={styles['field']}>
+                    <span className={styles['fieldLabel']}>{t('inboundApi')}</span>
+                    <select
+                      className={`${styles['input']} ${styles['selectInput']}`}
+                      value={inboundApi ?? ''}
+                      aria-label={t('inboundApi')}
+                      disabled={disabled}
+                      onChange={(event) => { setField('inboundApi', event.target.value) }}
+                    >
+                      {inboundApi === undefined ? <option value="">{t('customApiUnset')}</option> : null}
+                      {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+                    </select>
+                  </div>
+                </>
+              )
+              : null}
             {/* The protocol sits beside the endpoint it describes, as it does
                 on the create card. */}
             {ownsIdentity
@@ -445,6 +523,38 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                     {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
                   </select>
                 </div>
+              )
+              : null}
+            {ownsIdentity
+              ? (
+                <>
+                  <div className={styles['field']}>
+                    <span className={styles['fieldLabel']}>{t('headers')}</span>
+                    <textarea
+                      className={`${styles['input']} ${styles['jsonInput']}`}
+                      rows={4}
+                      value={headersText}
+                      placeholder={t('headersPlaceholder')}
+                      aria-label={t('headers')}
+                      disabled={disabled}
+                      onChange={(event) => { onHeadersChange(event.target.value) }}
+                    />
+                    {headersValid ? null : <p className={styles['error']}>{t('headersInvalid')}</p>}
+                  </div>
+                  <div className={styles['field']}>
+                    <span className={styles['fieldLabel']}>{t('bodyOverrides')}</span>
+                    <textarea
+                      className={`${styles['input']} ${styles['jsonInput']}`}
+                      rows={4}
+                      value={bodyText}
+                      placeholder={t('bodyOverridesPlaceholder')}
+                      aria-label={t('bodyOverrides')}
+                      disabled={disabled}
+                      onChange={(event) => { onBodyChange(event.target.value) }}
+                    />
+                    {bodyValid ? null : <p className={styles['error']}>{t('bodyOverridesInvalid')}</p>}
+                  </div>
+                </>
               )
               : null}
             {/* Both families edit the same rows through the same contract; only
@@ -495,6 +605,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         busy={busy}
         submitDisabled={disabled || layout === 'unknown'
           || (props.credentialOnly !== true && modelFailure !== undefined)
+          || (layout === 'pi-ai' && (!headersValid || !bodyValid))
           || shownKeyFailure !== undefined
           || (props.credentialRequired === true && keyValue.length === 0)}
         submitLabel={props.submitLabel ?? 'apply'}

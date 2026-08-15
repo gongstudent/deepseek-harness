@@ -102,6 +102,12 @@ profile 的 `models` 列表是*替换*该路由已安装 catalog，而不是扩�
 
 `supportedProtocols()` 刻意窄于 pi-ai 的完整流式 API 集合：它只保留 profile 能用密钥、端点与标头**完整描述**的那些协议。Bedrock 要用 AWS 凭据与 region 做 SigV4 签名，Vertex 需要 project、location 与应用默认凭据，Azure 需要提供方环境外加 api-version，Codex 走 OAuth——提供它们只会交回一个无法完成认证的路由。catalog 路由仍可经自己的 provider 抵达这些协议；被拒绝的只有显式覆盖。
 
+本地路由能在其间互转的三种协议是 `openai-completions`、`openai-responses` 与 `anthropic-messages`；它们之间的每一个有向组合，都可表示为一对 `api`（出站，上游所讲的协议）/ `inboundApi`（面向调用方，该路由对外提供的协议）。`headers` 设定提供方请求标头，`bodyOverrides` 承载该路由转发给上游的请求体键，每个值都会替换转换过程所组装的对应字段。
+
+`localRoute: { enabled, port }` 把这些转换跑在回环 HTTP 上。启用后它在 `port`（默认 `8317`）上绑定 `127.0.0.1`，提供 `POST /v1/chat/completions`、`POST /v1/responses` 与 `POST /v1/messages`——路径即调用方所讲的协议——以及 `GET /health`。请求会选中 `inboundApi` 与该路径相符、且其 catalog 持有请求体中 `model` 的那条路由；当符合的路由不止一条时，由 `x-dsh-provider` 标头点名是哪一条，缺少该标头会以 `400` 拒绝而不是替调用方猜测。没有任何路由提供的模型是 `404`，只有上游失败才是 `502`。改端口会重新绑定，绑定失败则保留原监听继续服务，停用则关闭监听。
+
+有两条限制是结构性的。入站与出站协议相同的请求按原样转发，因此它的 SSE 流原封不动抵达调用方；被转换的请求做不到这一点，因为每次转换都需要一份完整响应，于是对上游的调用以非流式发出，`stream: true` 的调用方收到的是把完整答案重新发出的合成事件序列——内容与分帧都正确，但是一次性抵达而非逐步抵达。该监听自身也不持有任何认证：它会把选中路由已配置的凭据花在任何抵达它的请求上，这既是它绑定回环的原因，也意味着本机上每个能打开该套接字的进程都能花掉那份凭据。
+
 ## 动态配置（settings + credentials）
 
 适配器经由一个 thunk **每操作读取一次** profile，而非在构造期冻结。插件在可选的 `ctx.settings` seam 上用同一份 `Config` schema 注册 `llm-pi-ai` namespace，并以其 `cordis.yml` 条目为组合 `base`；由于 `providers` 是字典，base 与用户的 `llm-pi-ai:` settings 分节**按提供方**合并：用户可以新增路由、覆盖组合路由的单个字段，或把路由指向另一个 proxy，全部在下一次请求生效，无需重启。未挂载 settings 服务时，仅由 entry 配置驱动适配器，行为不变。
@@ -114,7 +120,7 @@ profile 的 `models` 列表是*替换*该路由已安装 catalog，而不是扩�
 
 **没有**这份元数据的模型——条目未声明 `reasoningEfforts` 的手工声明模型，以及 pi-ai 标记为不具备推理能力的 catalog 模型——完全不公开 `reasoning`。pi-ai 会把这类模型报告为只支持 `off` 一档，但 `off` 会被翻译成*省略* reasoning 选项，而那与「不点名任何档位」产出的请求逐字节相同：选它关不掉任何东西，于是自身默认就在思考的提供方，会在界面显示 `off` 被选中的同时继续思考。把该能力报告为不可用，界面就只剩提供方默认这一项，不会再出现自相矛盾的控件。配置 profile 的 `reasoning` 值（包括 `off`）在存在时是部署默认值；省略它会保留提供方默认值。每次请求的 `GenerateOptions.reasoningEffort` 优先；未出现在确切模型能力中的档位会让**请求**在网络 I/O 前以 `UNSUPPORTED_REASONING_EFFORT` 失败，而不会被自动调整。**描述**一个模型则从不这样失败：同一提供方下各模型接受的档位并不一致，因此 `resolveModel` 对该模型拿不下的 profile 档位报告为「没有默认值」，而不是抛错。在那里抛错会让整个提供方从任何基于它构建的模型目录中消失——一个配错的 profile 字段连支持该档位的模型也一并藏起来——所以坏配置暴露在被执行处，而不是被描述处。pi-ai 的通用流选项通过省略 `reasoning` 表示 `off`。
 
-受支持的 profile 字段是 `apiKeyEnv`、`displayName`、`api`、`baseURL`、`models`、`modelOverrides`、`compat`、`defaultContextWindow`、`defaultMaxTokens`、`defaultInput`、`headers`、`reasoning`、`thinkingBudgets`、`cacheRetention`、`transport`、`timeoutMs`、`websocketConnectTimeoutMs`、`streamIdleTimeoutMs` 和 `retryPolicy`。每个 profile 的可选重试策略都会与该提供方路由一同捕获；省略时使用有界的常规默认值。流空闲间隔必须是正的有限 Node 定时器延迟，默认为五分钟，且只覆盖未完成提供方读取，不包括消费方思考时间。若已配置标头中有同名项，则以 Harness 应用归因为准。
+受支持的 profile 字段是 `apiKeyEnv`、`displayName`、`api`、`inboundApi`、`baseURL`、`models`、`modelOverrides`、`compat`、`defaultContextWindow`、`defaultMaxTokens`、`defaultInput`、`headers`、`bodyOverrides`、`reasoning`、`thinkingBudgets`、`cacheRetention`、`transport`、`timeoutMs`、`websocketConnectTimeoutMs`、`streamIdleTimeoutMs` 和 `retryPolicy`。每个 profile 的可选重试策略都会与该提供方路由一同捕获；省略时使用有界的常规默认值。流空闲间隔必须是正的有限 Node 定时器延迟，默认为五分钟，且只覆盖未完成提供方读取，不包括消费方思考时间。若已配置标头中有同名项，则以 Harness 应用归因为准。
 
 适配器强制 pi-ai SDK `maxRetries` 为零，因此一次 `stream()` 调用只会发起一次提供方请求。已移除 profile 字段 `maxRetries` 和 `maxRetryDelayMs` 会使加载失败，而不是静默倍增或隐藏单独组合的 agent（智能体）级重试预算。空闲超时会 abort SDK 的稳定请求信号，并以 `TIMEOUT` 呈现；较早的调用方 abort 仍为 `ABORTED`。
 

@@ -45,6 +45,21 @@ interface CanonicalResponse {
   outputTokens?: number
 }
 
+/**
+ * A request this route refuses before any upstream call.
+ *
+ * Carries the status the caller sees, so a request naming a model no route
+ * serves is not reported as an upstream failure: the two demand opposite
+ * responses — fix the request, or retry against a recovered upstream. Every
+ * other throw on the request path reaches the caller as `502`.
+ */
+class LocalRouteRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'LocalRouteRequestError'
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -489,7 +504,9 @@ function selectRoute(
     ? headerSelector
     : typeof body['provider'] === 'string' ? body['provider'] : undefined
   const modelId = typeof body['model'] === 'string' ? body['model'] : undefined
-  if (modelId === undefined || modelId.length === 0) throw new Error('Request body must contain a non-empty model.')
+  if (modelId === undefined || modelId.length === 0) {
+    throw new LocalRouteRequestError('Request body must contain a non-empty model.', 400)
+  }
 
   const candidates = [...profiles.entries()].flatMap(([provider, profile]) => {
     if (profile.inboundApi !== inbound) return []
@@ -500,13 +517,18 @@ function selectRoute(
   if (selector !== undefined) {
     const selected = candidates.find(candidate => candidate.provider === selector)
     if (selected === undefined) {
-      throw new Error(`Provider "${selector}" does not expose model "${modelId}" through ${inbound}.`)
+      throw new LocalRouteRequestError(`Provider "${selector}" does not expose model "${modelId}" through ${inbound}.`, 404)
     }
     return selected
   }
-  if (candidates.length === 0) throw new Error(`No local route exposes model "${modelId}" through ${inbound}.`)
+  if (candidates.length === 0) {
+    throw new LocalRouteRequestError(`No local route exposes model "${modelId}" through ${inbound}.`, 404)
+  }
   if (candidates.length > 1) {
-    throw new Error(`Model "${modelId}" is ambiguous; send the ${SELECTOR_HEADER} header with one of: ${candidates.map(c => c.provider).join(', ')}.`)
+    throw new LocalRouteRequestError(
+      `Model "${modelId}" is ambiguous; send the ${SELECTOR_HEADER} header with one of: ${candidates.map(c => c.provider).join(', ')}.`,
+      400,
+    )
   }
   return candidates[0] as SelectedRoute
 }
@@ -605,9 +627,20 @@ function writeSyntheticStream(response: ServerResponse, protocol: LocalRouteProt
   if (protocol === 'openai-completions') {
     const choice = (Array.isArray(body['choices']) && isRecord(body['choices'][0])) ? body['choices'][0] : {}
     const message = isRecord(choice['message']) ? choice['message'] : {}
+    // A streaming tool call is addressed by `index`, which the non-streaming
+    // message this synthesizes from does not carry: the official OpenAI client
+    // accumulates into `tool_calls[delta.index]`, so an absent index writes
+    // every call to the same undefined slot and the caller receives none.
+    // Emission order is the numbering, because one buffered response holds the
+    // whole list.
+    const rawCalls = message['tool_calls']
+    const calls: unknown[] | undefined = Array.isArray(rawCalls) ? rawCalls : undefined
+    const delta = calls === undefined
+      ? message
+      : { ...message, tool_calls: calls.map((call, index) => isRecord(call) ? { index, ...call } : call) }
     sse(response, undefined, {
       id: body['id'], object: 'chat.completion.chunk', created: body['created'], model: body['model'],
-      choices: [{ index: 0, delta: message, finish_reason: null }],
+      choices: [{ index: 0, delta, finish_reason: null }],
     })
     sse(response, undefined, {
       id: body['id'], object: 'chat.completion.chunk', created: body['created'], model: body['model'],
@@ -692,7 +725,7 @@ async function handleProxy(
     if (inboundStream) writeSyntheticStream(response, route.inbound, converted)
     else writeJson(response, upstream.status, converted)
   } catch (error) {
-    writeError(response, inbound, 502, error)
+    writeError(response, inbound, error instanceof LocalRouteRequestError ? error.status : 502, error)
   }
 }
 

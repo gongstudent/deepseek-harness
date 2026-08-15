@@ -134,7 +134,7 @@ describe('local route HTTP proxy', () => {
     await expect(fetch(`http://127.0.0.1:${String(port)}/health`)).rejects.toThrow()
   })
 
-  it('requires a provider selector when the model id is ambiguous', async () => {
+  it('answers an unserviceable request with its own status, not a gateway failure', async () => {
     const target = await upstream((_request, response) => {
       response.writeHead(500)
       response.end()
@@ -149,12 +149,60 @@ describe('local route HTTP proxy', () => {
     const route = new LocalRouteServer({ profiles: () => profiles, resolveApiKey: () => Promise.resolve(undefined) })
     routes.push(route)
     await route.configure({ enabled: true, port: 0 })
-    const response = await fetch(`http://127.0.0.1:${String(route.port)}/v1/chat/completions`, {
+    const post = (body: unknown): Promise<Response> => fetch(`http://127.0.0.1:${String(route.port)}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'shared-model', messages: [] }),
+      body: JSON.stringify(body),
     })
-    expect(response.status).toBe(502)
-    expect(await response.text()).toContain('x-dsh-provider')
+
+    const ambiguous = await post({ model: 'shared-model', messages: [] })
+    expect(ambiguous.status).toBe(400)
+    expect(await ambiguous.text()).toContain('x-dsh-provider')
+
+    const unknown = await post({ model: 'absent-model', messages: [] })
+    expect(unknown.status).toBe(404)
+    expect(await unknown.text()).toContain('No local route exposes model')
+
+    const modelless = await post({ messages: [] })
+    expect(modelless.status).toBe(400)
+  })
+
+  it('numbers synthetic tool-call deltas so a streaming client can accumulate them', async () => {
+    const target = await upstream((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        model: 'route-model',
+        content: [
+          { type: 'tool_use', id: 'toolu_a', name: 'bash', input: { command: 'ls' } },
+          { type: 'tool_use', id: 'toolu_b', name: 'read', input: { path: 'a.txt' } },
+        ],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 3, output_tokens: 1 },
+      }))
+    })
+    const profiles = resolveProfiles({
+      gateway: {
+        api: 'anthropic-messages',
+        inboundApi: 'openai-completions',
+        baseURL: target.baseURL,
+        models: [{ id: 'route-model', maxTokens: 1024 }],
+      },
+    })
+    const route = new LocalRouteServer({ profiles: () => profiles, resolveApiKey: () => Promise.resolve(undefined) })
+    routes.push(route)
+    await route.configure({ enabled: true, port: 0 })
+    const streamed = await fetch(`http://127.0.0.1:${String(route.port)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'route-model', messages: [{ role: 'user', content: 'go' }], stream: true }),
+    })
+    const first = (await streamed.text()).split('\n\n')[0] ?? ''
+    const chunk = JSON.parse(first.replace(/^data: /, '')) as {
+      choices: Array<{ delta: { tool_calls: Array<{ index: number; id: string }> } }>
+    }
+    expect(chunk.choices[0]?.delta.tool_calls.map(call => [call.index, call.id])).toEqual([[0, 'toolu_a'], [1, 'toolu_b']])
   })
 })

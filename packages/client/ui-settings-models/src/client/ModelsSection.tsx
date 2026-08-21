@@ -184,8 +184,21 @@ function localRouteValue(namespace: SettingsNamespaceView): { enabled: boolean; 
 function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRouteControlProps): ReactNode {
   const value = localRouteValue(namespace)
   const [portDraft, setPortDraft] = useState(String(value.port))
+  const [lastSyncedPort, setLastSyncedPort] = useState(value.port)
+  const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null)
   const [pending, setPending] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
+
+  if (value.port !== lastSyncedPort) {
+    setLastSyncedPort(value.port)
+    setPortDraft(String(value.port))
+  }
+
+  if (optimisticEnabled !== null && value.enabled === optimisticEnabled && !pending) {
+    setOptimisticEnabled(null)
+  }
+
+  const isEnabled = optimisticEnabled ?? value.enabled
   const parsedPort = /^\d+$/.test(portDraft) ? Number(portDraft) : Number.NaN
   const portValid = Number.isInteger(parsedPort) && parsedPort >= 1024 && parsedPort <= 65_535
 
@@ -193,17 +206,20 @@ function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRou
     if (pending || readOnly) return
     setPending(true)
     setFailure(undefined)
+    setOptimisticEnabled(enabled)
     void api.settings.mutate({
       ns: namespace.ns,
       ops: [{ op: 'set', path: ['localRoute'], value: { enabled, port } }],
       expectedRevision: namespace.revision,
     }).then(async (response) => {
       if (!response.result.ok) {
+        setOptimisticEnabled(null)
         setFailure(response.result.error.message)
         return
       }
       await controller.load()
     }).catch((error: unknown) => {
+      setOptimisticEnabled(null)
       setFailure(messageOf(error))
     }).finally(() => { setPending(false) })
   }
@@ -213,7 +229,7 @@ function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRou
       setFailure(t('localRoutePortInvalid'))
       return
     }
-    if (parsedPort !== value.port) write(value.enabled, parsedPort)
+    if (parsedPort !== value.port) write(isEnabled, parsedPort)
   }
 
   return (
@@ -229,19 +245,19 @@ function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRou
           type="button"
           className={styles['routeSwitch']}
           role="switch"
-          aria-checked={value.enabled}
+          aria-checked={isEnabled}
           aria-label={t('localRouteEnabled')}
-          title={value.enabled ? t('localRouteStop') : t('localRouteStart')}
+          title={isEnabled ? t('localRouteStop') : t('localRouteStart')}
           disabled={pending || readOnly}
           onClick={() => {
             if (!portValid) {
               setFailure(t('localRoutePortInvalid'))
               return
             }
-            write(!value.enabled, parsedPort)
+            write(!isEnabled, parsedPort)
           }}
         >
-          <span className={styles['routeSwitchTrack']} data-on={value.enabled || undefined} aria-hidden="true">
+          <span className={styles['routeSwitchTrack']} data-on={isEnabled || undefined} aria-hidden="true">
             <span className={styles['routeSwitchThumb']} />
           </span>
         </button>
@@ -267,8 +283,8 @@ function LocalRouteControl({ namespace, controller, api, t, readOnly }: LocalRou
           }}
         />
       </label>
-      <p className={value.enabled ? styles['routeRunning'] : styles['routeStopped']}>
-        {pending ? t('localRouteApplying') : value.enabled ? t('localRouteRunning') : t('localRouteStopped')}
+      <p className={isEnabled ? styles['routeRunning'] : styles['routeStopped']}>
+        {pending ? t('localRouteApplying') : isEnabled ? t('localRouteRunning') : t('localRouteStopped')}
       </p>
       {failure === undefined ? null : <p className={styles['error']}>{failure}</p>}
     </section>
@@ -400,7 +416,6 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
         ? null
         : (
           <LocalRouteControl
-            key={piAiNamespace.revision}
             namespace={piAiNamespace}
             controller={controller}
             api={api}

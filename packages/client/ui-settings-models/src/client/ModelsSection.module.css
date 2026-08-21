@@ -89,6 +89,7 @@
   border: 0;
   background: transparent;
   cursor: pointer;
+  transition: opacity 160ms var(--ds-ease-in-out);
 }
 
 .routeSwitch:disabled {
@@ -108,7 +109,7 @@
   height: 18px;
   border-radius: 9px;
   background: var(--dsw-alias-border-l2);
-  transition: background-color 120ms var(--ds-ease-in-out);
+  transition: background-color 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .routeSwitchThumb {
@@ -119,7 +120,7 @@
   height: 12px;
   border-radius: 50%;
   background: var(--dsw-alias-bg-layer-1);
-  transition: transform 120ms var(--ds-ease-in-out);
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .routeSwitchTrack[data-on='true'] {

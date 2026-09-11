@@ -777,6 +777,20 @@ select.input {
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* Search box and deselect-all above the candidate list. The input reuses the
+   shared `.input` face; only the layout is local to the dialog. */
+.fetchTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fetchSearch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .candidateList {
   display: flex;
   flex-direction: column;
@@ -805,4 +819,11 @@ select.input {
   font-family: var(--ds-font-family-code);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.candidateEmpty {
+  margin: 8px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
 }

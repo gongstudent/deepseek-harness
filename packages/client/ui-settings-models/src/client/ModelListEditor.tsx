@@ -12,6 +12,11 @@
  * A provider that cannot be interrogated (an unreachable endpoint, a protocol
  * with no readable listing) is not a dead end: the failure is shown next to the
  * rows the user can still fill in by hand.
+ *
+ * The picker's search box and deselect-all action are view-local: search
+ * narrows which candidates render, while the picks remain a set of ids, so
+ * deselect-all clears every pick — including any hidden behind an active
+ * filter — and adoption is unaffected by what the search box shows.
  */
 
 import { useState } from 'react'
@@ -164,6 +169,9 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
   const [failure, setFailure] = useState<string | undefined>(undefined)
   const [candidates, setCandidates] = useState<readonly DiscoveredModelView[] | undefined>(undefined)
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
+  // View-local filter over the candidate ids; cleared with the dialog so the
+  // next fetch opens unfiltered.
+  const [search, setSearch] = useState('')
   // Rows carry an id and a name; capacities are the exception, so they stay
   // folded until asked for rather than crowding every row with four inputs.
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set())
@@ -264,6 +272,7 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
   const closePicker = (): void => {
     setCandidates(undefined)
     setPicked(new Set())
+    setSearch('')
   }
 
   const adoptPicked = (): void => {
@@ -288,6 +297,17 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
       if (!next.delete(id)) next.add(id)
       return next
     })
+  }
+
+  // The list as a plain array once, so the filter needs no per-arm fallback:
+  // the dialog builds its body even while closed, where nothing was fetched.
+  const candidateList = candidates ?? []
+  /** The candidates the search box leaves visible, matched on the id alone. */
+  const visibleCandidates = (): readonly DiscoveredModelView[] => {
+    const query = search.trim().toLowerCase()
+    return query.length === 0
+      ? candidateList
+      : candidateList.filter(candidate => candidate.id.toLowerCase().includes(query))
   }
 
   // A route the adapter already describes answers without an endpoint; only a
@@ -445,8 +465,25 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
           </>
         )}
       >
+        <div className={styles['fetchTools']}>
+          <input
+            className={`${styles['input']} ${styles['fetchSearch']}`}
+            type="text"
+            value={search}
+            placeholder={t('fetchSearch')}
+            aria-label={t('fetchSearch')}
+            onChange={(event) => { setSearch(event.target.value) }}
+          />
+          <button
+            type="button"
+            className={styles['linkButton']}
+            onClick={() => { setPicked(new Set()) }}
+          >
+            {t('fetchDeselectAll')}
+          </button>
+        </div>
         <ul className={styles['candidateList']}>
-          {(candidates ?? []).map(candidate => (
+          {visibleCandidates().map(candidate => (
             <li key={candidate.id} className={styles['candidate']}>
               <label className={styles['candidateLabel']}>
                 <input
@@ -462,6 +499,9 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
             </li>
           ))}
         </ul>
+        {candidates !== undefined && visibleCandidates().length === 0
+          ? <p className={styles['candidateEmpty']}>{t('fetchNoMatch')}</p>
+          : null}
       </Modal>
     </section>
   )

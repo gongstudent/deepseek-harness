@@ -607,6 +607,68 @@ describe('endpoint interrogation', () => {
     // A disclosed output cap rides along with the candidate that has one.
     expect(firstMutate(mutate).ops[0]?.value).toEqual([{ id: 'a' }, { id: 'b', maxTokens: 2048 }])
   })
+
+  it('narrows the picker by search without disturbing the picks', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok({
+      models: [{ id: 'alpha-large' }, { id: 'alpha-mini' }, { id: 'beta-base' }],
+    })))
+    const { mutate } = await mountSection({ discover })
+    openEditor('openai')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+
+    const searchBox = screen.getByLabelText<HTMLInputElement>(en.fetchSearch)
+    fireEvent.change(searchBox, { target: { value: 'ALPHA' } })
+    // Matching is a case-insensitive substring of the id.
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(2)
+
+    fireEvent.change(searchBox, { target: { value: 'no-such-model' } })
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
+    expect(screen.getByText(en.fetchNoMatch)).toBeTruthy()
+
+    // Clearing the search restores the full list, still checked as it was.
+    fireEvent.change(searchBox, { target: { value: '' } })
+    const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+    expect(boxes).toHaveLength(3)
+    expect(boxes.every(box => box.checked)).toBe(true)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+
+    fireEvent.click(screen.getByText(en.apply))
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([
+      { id: 'alpha-large' }, { id: 'alpha-mini' }, { id: 'beta-base' },
+    ])
+  })
+
+  it('deselects every candidate, including ones an active search hides', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok({
+      models: [{ id: 'kept', contextWindow: 999 }, { id: 'new-a' }, { id: 'new-b' }],
+    })))
+    const { mutate } = await mountSection({
+      discover,
+      providers: { openai: { baseURL: 'https://proxy.example/v1', models: [{ id: 'kept', contextWindow: 111 }] } },
+    })
+    openEditor('openai')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+
+    // Only 'new-a' is visible, but the button names the whole selection.
+    fireEvent.change(screen.getByLabelText(en.fetchSearch), { target: { value: 'new-a' } })
+    fireEvent.click(screen.getByText(en.fetchDeselectAll))
+    fireEvent.change(screen.getByLabelText(en.fetchSearch), { target: { value: '' } })
+    const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+    expect(boxes.map(box => box.checked)).toEqual([false, false, false])
+
+    // Adopting after the clear adds nothing: the tuned row survives alone, and
+    // the draft then matches the stored one, so Apply has no write to make.
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    expect(screen.queryByText(en.fetchTitle)).toBeNull()
+    expect(screen.getAllByLabelText(new RegExp(en.modelId)).map(input => (input as HTMLInputElement).value))
+      .toEqual(['kept'])
+    expect(mutate).not.toHaveBeenCalled()
+  })
 })
 
 describe('provider rows', () => {
